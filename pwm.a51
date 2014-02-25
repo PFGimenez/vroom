@@ -25,6 +25,7 @@
 
 			CAPT_D		bit 	P1.6
 			CAPT_G		bit	P1.7
+			DIODE       bit   P1.0
 			VITESSE		equ	09h
 			DIRECTION	equ	01h
 
@@ -36,6 +37,8 @@
 ; Initialisation
 init:
 		  	mov sp, #0Fh				; afin de ne pas écraser la banque 1 (non nécessaire si pas d'utilisation de la pile)
+		  	mov DIRECTION, #140d		; roues droites
+		  	mov VITESSE, #138d      ; vitesse standard
 		  	; écriture des masques
 		  	mov 02h, #00010000b		; R2 de la banque 0
 		  	mov 03h, #11101111b  	; R3 de la banque 0
@@ -68,14 +71,18 @@ continue:
 
 ; ----------------------
 ; gestionCapteur
-		; TODO
-			jnb CAPT_G, pasGauche
-			
-			jmp pasDroit
+            jb CAPT_G, pasGauche
+           
+            mov DIRECTION, #150d
+            jmp finIf
 pasGauche:
-			jnb CAPT_D, pasDroit
-
-pasDroit:			
+            jb CAPT_D, pasDroit
+            mov DIRECTION, #130d
+            jmp finIf
+pasDroit:           
+            ; Si on arrive ici, c'est qu'on n'a détecté aucune bande noire
+            mov DIRECTION, #140d
+finIf:		
 
 ; ----------------------
 ; fin gestion du PWM
