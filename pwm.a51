@@ -2,14 +2,7 @@
 ; VROUM PROJECT / PF
 
 ; Principe de fonctionnement du PWM:
-; On divise le cycle de 20ms (appelé cycle PWM) en petits cycles de 25microsecondes (appelés cycles élémentaire).
-; Il faut donc 800 cycles élémentaires pour faire un cycle PWM. Chaque cycle élémentaire est mesuré par un timer
-; De plus, le cycle PWM est divisé en quatre parties d'égales longueurs (5ms chacune).
-; Etape 1: le signal haut pour la direction est envoyé.
-; Etape 2: le programme attend.
-; Etape 3: le signal haut pour le moteur est envoyé.
-; Etape 4: le programme attend.
-; La direction et le moteur auront donc chacun un PWM de meme période (20ms) mais déphasé (ce qui n'a aucune incidence).
+; (à réécrire)
 ; Le code est fait de manicre r ce que la partie pour commander la direction soit la meme que pour commander le moteur.
 ; La différenciation se fait au niveau de la banque utilisée (direction: banque 0 / moteur: banque 1).
 
@@ -18,11 +11,10 @@
 ; La gestion des capteurs est effectuée durant ces deux quarts de cycle PWM d'attente.
 
 ; Utilisations des registres:
-; R2: nombre de cycles élémentaires restants pour un quart de boucle PWM
-; R3: nombre de cycles élémentaires d'états bas pour un quart de boucle PWM
+; R3: (temps d'état haut en microsecondes - 1000) / 4
 
 ; Valeurs:
-; Direction: entre 125 (gauche) et 155 (droit). Tout droit: 140
+; Direction: entre 25 (droite) et 225 (gauche). Tout droit: 125
 
 ; Asservissement:
 ; Un asservissement en vitesse est effectué. Pour cela, le timer 1 compte sur P3.5, qui est relié à la diode.
@@ -37,8 +29,9 @@
             VITESSE        equ    0Bh
             DIRECTION    	equ    03h
 				CONSIGNE			equ	 30h
-				ATTENTE_ASSERV	equ	 31h
-				BP_MEM			equ	 32h
+				CONSIGNE_INIT	equ	 31h
+				ATTENTE_ASSERV	equ	 32h
+				BP_MEM			equ	 33h
                                     
             org 0000h
             jmp init
@@ -47,15 +40,20 @@
 ;---------------------------
 ; Initialisation
 init:
-            mov SP, #0Fh             ; afin de ne pas écraser la banque 1 (non nécessaire si pas d'utilisation de la pile)
-            mov DIRECTION, #140d     ; roues droites
-            mov VITESSE, #135d       ; vitesse standard
-            mov CONSIGNE, #15			 ; consigne en vitesse
+            mov SP, #0Fh             ; afin de ne pas écraser la banque 1
             clr DIODE					 ; on allume la diode de la carte
+            
+            ; ASSERV
+            mov DIRECTION, #125d     ; roues droites
+            mov VITESSE, #145d       ; vitesse standard
+            mov CONSIGNE_INIT, #15				; consigne de référence, constante a priori (peut-être modifiée par les boutons poussoirs)
+            mov CONSIGNE, CONSIGNE_INIT		; consigne en vitesse, variable
+            mov ATTENTE_ASSERV, #50	 ; 500ms entre deux changements de puissance délivrée au moteur et d'orientation
+            
+            ; TIMER
             mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe)
             setb TR1						 ; on lance directement le timer 1
-            mov ATTENTE_ASSERV, #50	 ; 500ms entre deux changements de puissance délivrée au moteur
-           
+				
 demiBouclePWM:
 ; --------------------------
 ; PWM
@@ -64,22 +62,47 @@ demiBouclePWM:
             mov PIN_MOTEUR, C
             cpl C
             mov PIN_DIR, C
-            mov R2,#200d                ;un quart de cycle élémentaire = 200 * 25microsecondes = 5 ms
-boucleElementaire:
-            db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 ;quelques nop pour compléter la boucle elementaire
-            mov A, R2                    ;ces trois lignes vérifies l'inégalité entre R2 et R3
-            subb A, R3
-            jnz continue
-            ; on éteint les deux
-            clr PIN_MOTEUR
-            clr PIN_DIR
-continue:
-            djnz R2, boucleElementaire        ;on recommence 200 fois
 
-            mov TL0, #08Dh
-            mov TH0, #0ECh
+            ; attente de 1ms
+            mov TL0, #2Fh
+            mov TH0, #0FCh
+            setb TR0
+boucle_attente_1ms:
+            jnb TF0, boucle_attente_1ms
             clr TF0
-            setb TR0                   ; on démarre le timer 0
+            clr TR0
+		      
+		      ; attente de 1ms encore
+            mov TL0, #00Fh
+            mov TH0, #0FCh
+            setb TR0
+            
+				; R3 contient soit VITESSE soit DIRECTION
+				mov ACC, R3
+				jz etat_bas
+
+; ne rien écrire ici, sinon le cas où R3=0 serait décalé de quelques microsecondes, ce qui pourrait faire exploser le véhicule.
+
+boucleElementaire:	; durée d'une boucle élémentaire: 4microsecondes
+				nop
+				nop
+            djnz ACC, boucleElementaire
+
+etat_bas:
+				nop						; ajustement de la parité de PC
+            clr PIN_MOTEUR
+            nop				; le nop est ici pour synchroniser la mise à 1 et la mise à 0.
+            clr PIN_DIR
+            
+boucle_attente_1ms_bis:
+            jnb TF0, boucle_attente_1ms_bis	;si R3 vaut 250, alors lorsqu'on arrive ici pour la première fois, THL0 = 0
+            clr TF0
+            clr TR0
+            
+             ; on lance le timer pour 8ms 
+            mov TL0, #0D8h
+            mov TH0, #0E0h
+            setb TR0
 
 ; ----------------------
 ; gestion des capteurs et de la direction
@@ -98,8 +121,8 @@ fin_xor:
 				jnc tourne_normalement
 				; si on arrive ici, c'est que NOIR_DROIT a changé
 				; dans ce cas, on remet les roues droites et on reprend la vitesse initiale
-				mov DIRECTION, #140
-				mov CONSIGNE, #15
+				mov DIRECTION, #125
+				mov CONSIGNE, CONSIGNE_INIT
 				jmp fin_direction
 				
 tourne_normalement:
@@ -107,7 +130,7 @@ tourne_normalement:
 				jnb NOIR_DROIT, tourne_gauche
 				clr C		; pour ne pas fausser les subb
 				mov A, DIRECTION
-				subb A, #155
+				subb A, #195
 				jz fin_direction
 				; on tourne progressivement et on abaisse la vitesse
 				mov A, DIRECTION
@@ -119,7 +142,7 @@ tourne_normalement:
 				jmp fin_direction
 tourne_gauche:
 				mov A, DIRECTION
-				subb A, #125
+				subb A, #155
 				jz fin_direction
 				mov A, DIRECTION
 				subb A, #3
@@ -138,13 +161,13 @@ fin_direction:
 				rr A
 				rrc A
 				jnc pas_bp0
-				dec CONSIGNE   ; si BP0 est enfoncé, on ralentit
+				dec CONSIGNE_INIT   ; si BP0 est enfoncé, on ralentit
 				setb DIODE		; et on éteint la diode
 				jmp pas_bp1
 pas_bp0:
 				rrc A
 				jnc pas_bp1
-				inc CONSIGNE	; si BP1 est enfoncé, on accélère
+				inc CONSIGNE_INIT	; si BP1 est enfoncé, on accélère
 				clr DIODE		; et on allume la diode
 pas_bp1:
 				mov BP_MEM, P1		; on actualise la mémoire
@@ -173,11 +196,18 @@ pasEncore:
 ; ----------------------
 ; fin gestion du PWM
                                             ; attente du reste des 5ms (étape 2 et 4)
-attente2:
-            jnb TF0, attente2
-            clr TR0                        ; on arrete le timer 0
-;            nop                            ; pas toujours nécessaire, selon la parité
-            cpl RS0
-            jmp demiBouclePWM         ;une fois les 200 cycles élémentaires terminées, on reprend le cycle PWM
-            end
-            
+attente_fin_pwm:
+            jnb TF0, attente_fin_pwm
+ 				mov A, TL0
+ 				rrc A
+ 				jc pasNop	;Le problème vient du fait qu'on recharge TL0 sans prendre en compte la valeur qu'il avait déjà.
+ 								;Or, celle-ci peut changer de 1 car "jnb" dure deux cycles. On redécale donc afin de ne plus avoir ce problème.
+ 								;Ce problème ne se pose qu'ici car, en début du programme, les embranchements conditionnels ne modifient pas la parité de PC. 
+ 				nop
+ pasNop:
+            clr TF0
+            clr TR0                       ; on arrete le timer 0
+            cpl RS0                   		; toggle de banque
+            jmp demiBouclePWM         		;à présent, on refait l'autre moitié de la boucle
+
+            end            
