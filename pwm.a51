@@ -18,10 +18,8 @@
 ; La gestion des capteurs est effectuée durant ces deux quarts de cycle PWM d'attente.
 
 ; Utilisations des registres:
-; R1: pointe vers BANDE_NOIRE ou VITESSE
 ; R2: nombre de cycles élémentaires restants pour un quart de boucle PWM
 ; R3: nombre de cycles élémentaires d'états bas pour un quart de boucle PWM
-; R4: contient une sauvegarde de P1 afin de détecter les fronts descendants
 
 ; Valeurs:
 ; Direction: entre 125 (gauche) et 155 (droit). Tout droit: 140
@@ -39,9 +37,9 @@
             VITESSE        equ    0Bh
             DIRECTION    	equ    03h
 				CONSIGNE			equ	 30h
-				ATTENTE_INT		equ	 31h
+				ATTENTE_ASSERV	equ	 31h
 				BP_MEM			equ	 32h
-
+                                    
             org 0000h
             jmp init
             
@@ -52,11 +50,11 @@ init:
             mov SP, #0Fh             ; afin de ne pas écraser la banque 1 (non nécessaire si pas d'utilisation de la pile)
             mov DIRECTION, #140d     ; roues droites
             mov VITESSE, #135d       ; vitesse standard
-            clr DIODE					 ; on allume la diode de la carte
-            mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe)            
-            setb TR1						 ; on lance directement le timer 1
-            mov ATTENTE_INT, #50
             mov CONSIGNE, #15			 ; consigne en vitesse
+            clr DIODE					 ; on allume la diode de la carte
+            mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe)
+            setb TR1						 ; on lance directement le timer 1
+            mov ATTENTE_ASSERV, #50	 ; 500ms entre deux changements de puissance délivrée au moteur
            
 demiBouclePWM:
 ; --------------------------
@@ -66,19 +64,19 @@ demiBouclePWM:
             mov PIN_MOTEUR, C
             cpl C
             mov PIN_DIR, C
-            mov R1,#200d                ;un quart de cycle élémentaire = 200 * 25microsecondes = 5 ms
+            mov R2,#200d                ;un quart de cycle élémentaire = 200 * 25microsecondes = 5 ms
 boucleElementaire:
             db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 ;quelques nop pour compléter la boucle elementaire
-            mov A, R1                    ;ces trois lignes vérifies l'inégalité entre R1 et R2
+            mov A, R2                    ;ces trois lignes vérifies l'inégalité entre R2 et R3
             subb A, R3
             jnz continue
             ; on éteint les deux
             clr PIN_MOTEUR
             clr PIN_DIR
 continue:
-            djnz R1, boucleElementaire        ;on recommence 200 fois
+            djnz R2, boucleElementaire        ;on recommence 200 fois
 
-            mov TL0, #08Eh
+            mov TL0, #08Dh
             mov TH0, #0ECh
             clr TF0
             setb TR0                   ; on démarre le timer 0
@@ -89,13 +87,46 @@ continue:
 				mov C, NOIR_DROIT
 				anl C, /CAPT_G					;si on capte à gauche, on met NOIR_DROIT à 0. Sinon, on ne change rien.
 				orl C, CAPT_D					;si on capte à droite, on met NOIR_DROIT à 1. Sinon, on ne change rien.
+				; ensuite, on effectue l'opération "XRL C, NOIR_DROIT" qui n'est pas dans le jeu d'instructions
+				jnb NOIR_DROIT, est_nul
 				mov NOIR_DROIT, C
+				cpl C
+				jmp fin_xor
+est_nul:
+				mov NOIR_DROIT, C
+fin_xor:
+				jnc tourne_normalement
+				; si on arrive ici, c'est que NOIR_DROIT a changé
+				; dans ce cas, on remet les roues droites et on reprend la vitesse initiale
+				mov DIRECTION, #140
+				mov CONSIGNE, #15
+				jmp fin_direction
 				
-				jnc tourne_gauche
-				inc DIRECTION
+tourne_normalement:
+				djnz ATTENTE_ASSERV, fin_direction	; on change l'angle progressivement et la consigne en vitesse
+				jnb NOIR_DROIT, tourne_gauche
+				clr C		; pour ne pas fausser les subb
+				mov A, DIRECTION
+				subb A, #155
+				jz fin_direction
+				; on tourne progressivement et on abaisse la vitesse
+				mov A, DIRECTION
+				add A, #3
+				mov DIRECTION, A
+				mov A, CONSIGNE
+				subb A, #3
+				mov CONSIGNE, A
 				jmp fin_direction
 tourne_gauche:
-				dec DIRECTION
+				mov A, DIRECTION
+				subb A, #125
+				jz fin_direction
+				mov A, DIRECTION
+				subb A, #3
+				mov DIRECTION, A
+				mov A, CONSIGNE
+				subb A, #3
+				mov CONSIGNE, A
 fin_direction:
 
 ; ----------------------
@@ -119,35 +150,33 @@ pas_bp1:
 				mov BP_MEM, P1		; on actualise la mémoire
 
 ; --------------------------
-; Asservissement
+; asservissement
 
-				djnz ATTENTE_INT, pasEncore
-				clr TR1   					; on arrête de compter, on récupère sa valeur, réinitialise le compteur et redémarre le timer
+				mov A, ATTENTE_ASSERV
+				jnz pasEncore
 				mov A, TL1					
 				mov TL1, #0
-				setb TR1
 				subb A, CONSIGNE
 				anl A, #11111100b ; application d'un seuil (valeur expérimentale)
 				cjne A, #0, modifier_vitesse
 				jmp fin_asserv
-modifier_vitesse:	
+modifier_vitesse:
 				jc augmente
 				dec VITESSE					; la vitesse est trop grande, il faut la diminuer
 				jmp fin_asserv
 augmente:
 				inc VITESSE					; la vitesse est trop basse, il faut l'augmenter
 fin_asserv:
-				mov ATTENTE_INT, #50h	; on relance une nouvelle attente
+				mov ATTENTE_ASSERV, #50h	; on relance une nouvelle attente
 pasEncore:
 				
 ; ----------------------
 ; fin gestion du PWM
-                                            ; attente de 5ms (étape 2 et 4)
+                                            ; attente du reste des 5ms (étape 2 et 4)
 attente2:
             jnb TF0, attente2
             clr TR0                        ; on arrete le timer 0
-            clr EX0								 ; on désactive INT0
-            nop                            ; pas toujours nécessaire, selon la parité
+;            nop                            ; pas toujours nécessaire, selon la parité
             cpl RS0
             jmp demiBouclePWM         ;une fois les 200 cycles élémentaires terminées, on reprend le cycle PWM
             end
