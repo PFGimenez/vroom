@@ -1,10 +1,21 @@
+
+; ESCLAVE / PF
+; Deux proto-threads sont utilisés sur cette carte.
+; Le passage de l'un à l'autre se fait de la manière suivant.
+; A chaque fois que le timer0 (sur 13bits) overflow, son interruption déroute le programme et modifie la banque.
+; Par contre, cela empêche aux threads d'utiliser la pile.
+; On pourrait modifier la structure de la pile pour pallier à ce problème, mais ce n'était pas nécessaire.
  
 	org 0000h
 	jmp init
 	
+; ----------------------
+; GESTION DU TIMER 0
 	org 000Bh
-	jmp gestion
-	
+	xrl SP, #10b   ; toggle de pile
+   cpl RS0 			; toggle de banque
+   reti
+   
 	org 0030h
 init:
 ; --------------------
@@ -15,22 +26,11 @@ init:
 	mov 32h, #00h       ; octet de poids faible
 	mov 33h, #02h       ; octet de poids fort
 	; Lancement du timer 0
-	setb ea
-	setb et0
-	mov tmod, 1b	;mode 1: compteur sur 16 bits
-	setb tr0
+	setb EA
+	setb ET0
+	setb TR0
 	jmp thread1
-	
-; ----------------------
-; GESTION DU TIMER 0
-gestion:
-	clr tf0
-	inc SP
-	inc SP
-	anl SP, #11111011b   ; toggle de pile
-   xrl PSW, #00001000b 	; toggle de banque
-   reti
-		
+			
 ; ----------------------
 ; THREAD 1
 	; TODO
