@@ -20,18 +20,19 @@
 ; Un asservissement en vitesse est effectué. Pour cela, le timer 1 compte sur P3.5, qui est relié à la diode.
 ; Régulièrement, la valeur de ce timer est vérifiée. La décision d'augmenter la vitesse ou de la diminuer est alors prise selon cette valeur. Enfin, le timer est remis à zero.
 
-            PIN_DIR       	bit    P1.4
-            PIN_MOTEUR    	bit    P1.5
-            CAPT_D        	bit    P1.6
-            CAPT_G        	bit    P1.7
-            DIODE       	bit  	 P1.0
-            NOIR_DROIT	 	bit	 00h
-            VITESSE        equ    0Bh
-            DIRECTION    	equ    03h
-				CONSIGNE			equ	 30h
-				CONSIGNE_INIT	equ	 31h
-				ATTENTE_ASSERV	equ	 32h
-				BP_MEM			equ	 33h
+            PIN_DIR       		bit    P1.4
+            PIN_MOTEUR    		bit    P1.5
+            CAPT_D        		bit    P1.6
+            CAPT_G        		bit    P1.7
+            DIODE       		bit  	 P1.0
+            NOIR_DROIT	 		bit	 00h
+            VITESSE        	equ    0Bh
+            DIRECTION    		equ    03h
+				CONSIGNE				equ	 30h
+				CONSIGNE_INIT		equ	 31h
+				ATTENTE_ASSERV		equ	 32h
+				ATTENTE_CONSIGNE  equ	 33h
+				BP_MEM				equ	 34h
                                     
             org 0000h
             jmp init
@@ -48,7 +49,8 @@ init:
             mov VITESSE, #145d       ; vitesse standard
             mov CONSIGNE_INIT, #15				; consigne de référence, constante a priori (peut-être modifiée par les boutons poussoirs)
             mov CONSIGNE, CONSIGNE_INIT		; consigne en vitesse, variable
-            mov ATTENTE_ASSERV, #50	 ; 500ms entre deux changements de puissance délivrée au moteur et d'orientation
+            mov ATTENTE_ASSERV, #50	 ; 500ms entre deux changements de puissance délivrée au moteur
+				mov ATTENTE_CONSIGNE, #1	; pour la modifier immédiatement
             
             ; TIMER
             mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe)
@@ -123,10 +125,12 @@ fin_xor:
 				; dans ce cas, on remet les roues droites et on reprend la vitesse initiale
 				mov DIRECTION, #125
 				mov CONSIGNE, CONSIGNE_INIT
+				mov ATTENTE_CONSIGNE, #1
 				jmp fin_direction
 				
 tourne_normalement:
-				djnz ATTENTE_ASSERV, fin_direction	; on change l'angle progressivement et la consigne en vitesse
+				djnz ATTENTE_CONSIGNE, fin_direction
+				mov ATTENTE_CONSIGNE, #50h			;500ms entre deux changements de consigne
 				jnb NOIR_DROIT, tourne_gauche
 				clr C		; pour ne pas fausser les subb
 				mov A, DIRECTION
@@ -141,7 +145,7 @@ tourne_normalement:
 				mov CONSIGNE, A
 				jmp fin_direction
 tourne_gauche:
-				mov A, DIRECTION
+				mov A, DIRECTION			;pas de commentaires ici. ça vous apprendra.
 				subb A, #155
 				jz fin_direction
 				mov A, DIRECTION
@@ -174,11 +178,10 @@ pas_bp1:
 
 ; --------------------------
 ; asservissement
-
-				mov A, ATTENTE_ASSERV
-				jnz pasEncore
-				mov A, TL1					
-				mov TL1, #0
+				djnz ATTENTE_ASSERV, pasEncore
+				mov A, TL1
+				mov TL1, #0			; on n'éteint pas le timer1 seulement pour ça, WOLOLO
+				clr C					; sait-on jamais, on ne peut pas lui faire confiance
 				subb A, CONSIGNE
 				anl A, #11111100b ; application d'un seuil (valeur expérimentale)
 				cjne A, #0, modifier_vitesse
@@ -200,11 +203,12 @@ attente_fin_pwm:
             jnb TF0, attente_fin_pwm
  				mov A, TL0
  				rrc A
- 				jc pasNop	;Le problème vient du fait qu'on recharge TL0 sans prendre en compte la valeur qu'il avait déjà.
- 								;Or, celle-ci peut changer de 1 car "jnb" dure deux cycles. On redécale donc afin de ne plus avoir ce problème.
- 								;Ce problème ne se pose qu'ici car, en début du programme, les embranchements conditionnels ne modifient pas la parité de PC. 
- 				nop
- pasNop:
+ ;Le problème vient du fait qu'on recharge TL0 sans prendre en compte la valeur qu'il avait déjà.
+ ;Or, celle-ci peut varier de 1 car "jnb" dure deux cycles. On redécale donc afin de ne plus avoir ce problème.
+ ;Ce problème ne se pose qu'ici car, en début du programme, les embranchements conditionnels ne modifient pas la parité de PC. 
+ 				jc pasNop
+ 				nop									; COUCOU MARC !!!
+pasNop:
             clr TF0
             clr TR0                       ; on arrete le timer 0
             cpl RS0                   		; toggle de banque
