@@ -3,7 +3,7 @@
 ; Principe de fonctionnement du PWM:
 ; (? r??crire)
 ; Le code est fait de manicre r ce que la partie pour commander la direction soit la meme que pour commander le moteur.
-; La diff?renciation se fait au niveau de la banque utilis?e (direction: banque 0 / moteur: banque 1).
+; La diff?renciation se fait au niveau de la valeur de R0 (utilisé en adressage indirect)
 
 ; Les interruptions peuvent empecher une d?tection imm?diate de la fin du timer.
 ; C'est pour cette raison que les interruptions seront d?sactiv?es durant les ?tapes 1 et 3 (envoi d'un signal) et activ?s durant les ?tapes 2 et 4 (attente)
@@ -26,14 +26,13 @@
             DIODE               bit       P1.0
             NOIR_DROIT             bit     00h
             LASER_ACTIVE  bit 01h
-            VITESSE            equ    0Bh
-            DIRECTION            equ    03h
+            ENCORE bit 02h
+            VITESSE            equ    01b
+            DIRECTION            equ    10b
                 VITESSE_MIN                equ     30h
                 ATTENTE_ASSERV        equ     32h
                 BP_MEM                equ     33h
-                
-
-                                   
+                                                   
             org 0000h
             jmp init
             
@@ -41,8 +40,7 @@
             org 000Bh
 				clr TF0
             reti
-            
-           
+                       
             org 0030h
 ;---------------------------
 ; Initialisation
@@ -55,10 +53,8 @@ init:
             mov VITESSE_MIN, #165                ; vitesse sans boost, modifiable par les boutons poussoirs
             mov VITESSE, VITESSE_MIN
             mov ATTENTE_ASSERV, #50     ; 500ms entre deux changements de puissance d?livr?e au moteur
-            mov 13h, #00h		; R3 de la banque 2
-            mov 1Bh, #00h     ; R3 de la banque 3
-
-mov DIRECTION, #0
+				setb RS0
+            mov 08h, #01h	; 08h: R0 de la banque 1
            
             ; TIMER
             setb EA
@@ -72,48 +68,23 @@ mov DIRECTION, #0
 
 demiBouclePWM:
 ; --------------------------
-; PWM
-            ; ces quelques lignes mettent à 1 la pin soit de direction soit du moteur
-            ; Si RS1 = 1, on met 0 aux deux
-            mov C, RS0
-            anl C, /RS1
+; PWM         
+            ; on s'occupe du moteur si R0 vaut 01b, de la direction si R0 vaut 10b
+            ; il ne faut pas faire d'embranchement sinon timer 0 n'aura pas toujours la même valeur
+            mov A, R0
+				mov C, ACC.2
+				orl C, ACC.3
+				cpl C
+				mov ACC.7, C	; pourquoi ACC.7 particulièrement? Sans raison, c'est juste un bit disponible pour retenir C
+				anl C, ACC.0
             mov PIN_MOTEUR, C
-            cpl C
-            anl C, /RS1
+				mov C, ACC.1
+				anl C, ACC.7
             mov PIN_DIR, C
 
-            ; attente de 1ms
+            ; attente de 1ms. Pendant ce temps, on fait le reste.
             mov TL0, #2Ch
             mov TH0, #0FCh
-            inc PCON			; DODO
-             
-              ; attente de 1ms encore
-            mov TL0, #00Bh
-            mov TH0, #0FCh
-           
-                ; R3 contient soit VITESSE soit DIRECTION, soit 0 (banque 2 et 3)
-                mov A, R3
-                jz etat_bas
-
-; ne rien ?crire ici, sinon le cas o? R3=0 serait d?cal? de quelques microsecondes, ce qui pourrait faire exploser le v?hicule.
-
-boucleElementaire:    ; dur?e d'une boucle ?l?mentaire: 4microsecondes
-                nop
-                nop
-            djnz ACC, boucleElementaire
-
-etat_bas:
-            clr PIN_MOTEUR
-            nop								; afin que l'écart temporel entre les deux clr soit le même qu'en les deux mov
-            nop
-            nop
-            nop
-            clr PIN_DIR
-            inc PCON	; DODO		(si R3 vaut 250, alors que PC est sur cette ligne, timer0 vaut FFFF)
-           
-             ; on lance le timer pour 3ms
-            mov TL0, #05Fh
-            mov TH0, #0F4h
 
 ; ----------------------
 ; gestion des capteurs et de la direction
@@ -195,12 +166,41 @@ pas_bloque:
       mov VITESSE, VITESSE_MIN
 pasEncore:
 
+
+            inc PCON			; DODO             
+
 ; ----------------------
 ; fin gestion du PWM
 
-            cpl RS1                           ; toggle de banque               
-            jb RS1, pasToggle
-				cpl RS0
+              ; attente de 1ms encore
+            mov TL0, #00Bh
+            mov TH0, #0FCh
+           
+                ; R0 pointe soit vers vitesse, soit vers direction, soit vers 0
+                mov A, @R0
+                jz etat_bas
+
+; ne rien ?crire ici, sinon le cas o? R3=0 serait d?cal? de quelques microsecondes, ce qui pourrait faire exploser le v?hicule.
+
+boucleElementaire:    ; dur?e d'une boucle ?l?mentaire: 4microsecondes
+                nop
+                nop
+            djnz ACC, boucleElementaire
+etat_bas:
+            clr PIN_MOTEUR
+            nop								; afin que l'écart temporel entre les deux clr soit le même qu'en les deux mov
+            nop
+            nop
+            nop
+            clr PIN_DIR
+            inc PCON	; DODO		(si R3 vaut 250, alors que PC est sur cette ligne, timer0 vaut FFFF)
+           
+             ; on lance le timer pour 0.5ms
+            mov TL0, #029h
+            mov TH0, #0FEh
+            
+				inc R0
+				anl 08h, #111b	; on tourne sur 8 registres
 pasToggle:
             inc PCON
                ; DODO
