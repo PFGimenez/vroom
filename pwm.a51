@@ -47,7 +47,7 @@
 ;---------------------------
 ; Initialisation
 init:
-            mov SP, #0Fh             ; afin de ne pas ?craser la banque 1
+            mov SP, #6Fh             ; afin de ne pas ?craser la banque 1
             clr DIODE                     ; on allume la diode de la carte
            
             ; ASSERV
@@ -55,8 +55,10 @@ init:
             mov VITESSE_MIN, #165                ; vitesse sans boost, modifiable par les boutons poussoirs
             mov VITESSE, VITESSE_MIN
             mov ATTENTE_ASSERV, #50     ; 500ms entre deux changements de puissance d?livr?e au moteur
+            mov 13h, #00h		; R3 de la banque 2
+            mov 1Bh, #00h     ; R3 de la banque 3
 
-mov VITESSE, #0
+mov DIRECTION, #0
            
             ; TIMER
             setb EA
@@ -64,21 +66,24 @@ mov VITESSE, #0
             mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe)
             setb TR0
             setb TR1                         ; on lance directement le timer 1
-            db 0,0,0,0,0,0,0	; équilibrage de timer 0
+            db 0,0,0,0,0,0	; équilibrage de timer 0
 
 ; ne rien écrire ici
 
 demiBouclePWM:
 ; --------------------------
 ; PWM
-            ; ces quelques lignes mettent ? 1 la pin soit de direction (si on est dans l'?tape de la direction) soit du moteur
+            ; ces quelques lignes mettent à 1 la pin soit de direction soit du moteur
+            ; Si RS1 = 1, on met 0 aux deux
             mov C, RS0
+            anl C, /RS1
             mov PIN_MOTEUR, C
             cpl C
+            anl C, /RS1
             mov PIN_DIR, C
 
             ; attente de 1ms
-            mov TL0, #2Ah
+            mov TL0, #2Ch
             mov TH0, #0FCh
             inc PCON			; DODO
              
@@ -86,7 +91,7 @@ demiBouclePWM:
             mov TL0, #00Bh
             mov TH0, #0FCh
            
-                ; R3 contient soit VITESSE soit DIRECTION
+                ; R3 contient soit VITESSE soit DIRECTION, soit 0 (banque 2 et 3)
                 mov A, R3
                 jz etat_bas
 
@@ -101,12 +106,14 @@ etat_bas:
             clr PIN_MOTEUR
             nop								; afin que l'écart temporel entre les deux clr soit le même qu'en les deux mov
             nop
+            nop
+            nop
             clr PIN_DIR
             inc PCON	; DODO		(si R3 vaut 250, alors que PC est sur cette ligne, timer0 vaut FFFF)
            
-             ; on lance le timer pour 8ms
-            mov TL0, #0D6h
-            mov TH0, #0E0h
+             ; on lance le timer pour 3ms
+            mov TL0, #05Fh
+            mov TH0, #0F4h
 
 ; ----------------------
 ; gestion des capteurs et de la direction
@@ -144,7 +151,6 @@ tourne_normalement:
                 jz fin_direction
                 ; on tourne progressivement et on abaisse la vitesse
                 inc DIRECTION
-                inc DIRECTION
                 jmp fin_direction
 tourne_droite:
                 mov A, DIRECTION            ;pas de commentaires ici. ?a vous apprendra.
@@ -152,13 +158,11 @@ tourne_droite:
                 subb A, #29
                 jz fin_direction
                 dec DIRECTION
-                dec DIRECTION
 fin_direction:
 
 ; ----------------------
 ; gestion des boutons poussoirs
 
-      jmp fin_bp
                 mov A, P1
                 xrl A, BP_MEM    ; on v?rifie que l'?tat a chang? (qu'on soit sur un front)
                 anl A, BP_MEM  ; on v?rifie que la pr?c?dente valeur est 1. Ces deux lignes d?tectent donc un front descendant.
@@ -166,13 +170,13 @@ fin_direction:
                 rrc A
                 jnc pas_bp0
                 dec VITESSE_MIN   ; si BP0 est enfonc?, on ralentit
-                setb DIODE        ; et on ?teint la diode
+;                setb DIODE        ; et on ?teint la diode
                 jmp pas_bp1
 pas_bp0:
                 rrc A
                 jnc pas_bp1
                 inc VITESSE_MIN    ; si BP1 est enfonc?, on acc?l?re
-                clr DIODE        ; et on allume la diode
+;                clr DIODE        ; et on allume la diode
 pas_bp1:
                 mov BP_MEM, P1        ; on actualise la m?moire
 fin_bp:
@@ -190,13 +194,16 @@ fin_bp:
 pas_bloque:
       mov VITESSE, VITESSE_MIN
 pasEncore:
-               
+
 ; ----------------------
 ; fin gestion du PWM
-                                            ; attente du reste des 5ms (?tape 2 et 4)
+
+            cpl RS1                           ; toggle de banque               
+            jb RS1, pasToggle
+				cpl RS0
+pasToggle:
             inc PCON
                ; DODO
-            cpl RS0                           ; toggle de banque
             jmp demiBouclePWM
 
             end    
