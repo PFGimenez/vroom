@@ -28,13 +28,20 @@
             LASER_ACTIVE  bit 01h
             VITESSE            equ    0Bh
             DIRECTION            equ    03h
-                CONSIGNE                equ     30h
-                CONSIGNE_INIT        equ     31h
+                VITESSE_MIN                equ     30h
                 ATTENTE_ASSERV        equ     32h
                 BP_MEM                equ     33h
+                
+
                                    
             org 0000h
             jmp init
+            
+            ; Réveil par cette interruption  (mode idle)
+            org 000Bh
+				clr TF0
+            reti
+            
            
             org 0030h
 ;---------------------------
@@ -45,15 +52,22 @@ init:
            
             ; ASSERV
             mov DIRECTION, #125d     ; roues droites
-            mov VITESSE, #165d       ; vitesse standard
-            mov CONSIGNE_INIT, #10                ; consigne de r?f?rence, constante a priori (peut-?tre modifi?e par les boutons poussoirs)
-            mov CONSIGNE, CONSIGNE_INIT        ; consigne en vitesse, variable
+            mov VITESSE_MIN, #165                ; vitesse sans boost, modifiable par les boutons poussoirs
+            mov VITESSE, VITESSE_MIN
             mov ATTENTE_ASSERV, #50     ; 500ms entre deux changements de puissance d?livr?e au moteur
+
+mov VITESSE, #0
            
             ; TIMER
+            setb EA
+            setb ET0				; activation de l'interruption de timer0
             mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe)
+            setb TR0
             setb TR1                         ; on lance directement le timer 1
-               
+            db 0,0,0,0,0,0,0	; équilibrage de timer 0
+
+; ne rien écrire ici
+
 demiBouclePWM:
 ; --------------------------
 ; PWM
@@ -64,21 +78,16 @@ demiBouclePWM:
             mov PIN_DIR, C
 
             ; attente de 1ms
-            mov TL0, #2Fh
+            mov TL0, #2Ah
             mov TH0, #0FCh
-            setb TR0
-boucle_attente_1ms:
-            jnb TF0, boucle_attente_1ms
-            clr TF0
-            clr TR0
+            inc PCON			; DODO
              
               ; attente de 1ms encore
-            mov TL0, #00Fh
+            mov TL0, #00Bh
             mov TH0, #0FCh
-            setb TR0
            
                 ; R3 contient soit VITESSE soit DIRECTION
-                mov ACC, R3
+                mov A, R3
                 jz etat_bas
 
 ; ne rien ?crire ici, sinon le cas o? R3=0 serait d?cal? de quelques microsecondes, ce qui pourrait faire exploser le v?hicule.
@@ -89,24 +98,25 @@ boucleElementaire:    ; dur?e d'une boucle ?l?mentaire: 4microsecondes
             djnz ACC, boucleElementaire
 
 etat_bas:
-                nop                        ; ajustement de la parit? de PC
             clr PIN_MOTEUR
-            nop                ; le nop est ici pour synchroniser la mise ? 1 et la mise ? 0.
+            nop								; afin que l'écart temporel entre les deux clr soit le même qu'en les deux mov
+            nop
             clr PIN_DIR
-           
-boucle_attente_1ms_bis:
-            jnb TF0, boucle_attente_1ms_bis    ;si R3 vaut 250, alors lorsqu'on arrive ici pour la premi?re fois, THL0 = 0
-            clr TF0
-            clr TR0
+            inc PCON	; DODO		(si R3 vaut 250, alors que PC est sur cette ligne, timer0 vaut FFFF)
            
              ; on lance le timer pour 8ms
-            mov TL0, #0D8h
+            mov TL0, #0D6h
             mov TH0, #0E0h
-            setb TR0
 
 ; ----------------------
 ; gestion des capteurs et de la direction
 
+					; cas particulier: si les deux détectent en même temps, on va tout droit
+					jnb CAPT_G, pasLesDeux
+					jnb CAPT_D, pasLesDeux
+					jmp TOUT_DROIT
+pasLesDeux:
+					
                 mov C, NOIR_DROIT
                 anl C, /CAPT_G                    ;si on capte ? gauche, on met NOIR_DROIT ? 0. Sinon, on ne change rien.
                 orl C, CAPT_D                    ;si on capte ? droite, on met NOIR_DROIT ? 1. Sinon, on ne change rien.
@@ -124,7 +134,6 @@ tout_droit:
                 ; si on arrive ici, c'est que NOIR_DROIT a chang?
                 ; dans ce cas, on remet les roues droites et on reprend la vitesse initiale
                 mov DIRECTION, #125
-                mov CONSIGNE, CONSIGNE_INIT
                 jmp fin_direction
                
 tourne_normalement:
@@ -136,9 +145,6 @@ tourne_normalement:
                 ; on tourne progressivement et on abaisse la vitesse
                 inc DIRECTION
                 inc DIRECTION
-;                mov A, CONSIGNE
-;                subb A, #3
-;                mov CONSIGNE, A
                 jmp fin_direction
 tourne_droite:
                 mov A, DIRECTION            ;pas de commentaires ici. ?a vous apprendra.
@@ -147,9 +153,6 @@ tourne_droite:
                 jz fin_direction
                 dec DIRECTION
                 dec DIRECTION
-;                mov A, CONSIGNE
-;                subb A, #3
-;                mov CONSIGNE, A
 fin_direction:
 
 ; ----------------------
@@ -162,13 +165,13 @@ fin_direction:
                 rr A
                 rrc A
                 jnc pas_bp0
-                dec CONSIGNE_INIT   ; si BP0 est enfonc?, on ralentit
+                dec VITESSE_MIN   ; si BP0 est enfonc?, on ralentit
                 setb DIODE        ; et on ?teint la diode
                 jmp pas_bp1
 pas_bp0:
                 rrc A
                 jnc pas_bp1
-                inc CONSIGNE_INIT    ; si BP1 est enfonc?, on acc?l?re
+                inc VITESSE_MIN    ; si BP1 est enfonc?, on acc?l?re
                 clr DIODE        ; et on allume la diode
 pas_bp1:
                 mov BP_MEM, P1        ; on actualise la m?moire
@@ -177,60 +180,23 @@ fin_bp:
 ; --------------------------
 ; asservissement
 
-                djnz ATTENTE_ASSERV, pasEncore
+      djnz ATTENTE_ASSERV, pasEncore
       mov ATTENTE_ASSERV, #50
-                mov A, TL1
-                mov TL1, #0            ; on n'?teint pas le timer1 seulement pour ?a, WOLOLO
+      mov A, TL1
+      mov TL1, #0            ; on n'?teint pas le timer1 seulement pour ?a, WOLOLO
       jnz pas_bloque
-      mov VITESSE, #180d
+      mov VITESSE, #180d		; BOOST!
       jmp pasEncore
 pas_bloque:
-      mov VITESSE, #165d
-
-;      jmp pasEncore
-;                djnz ATTENTE_ASSERV, pasEncore
-;                mov A, TL1
-;                mov TL1, #0            ; on n'?teint pas le timer1 seulement pour ?a, WOLOLO
-;                clr C                    ; sait-on jamais, on ne peut pas lui faire confiance
-;                subb A, CONSIGNE
-;                cjne A, #0, modifier_vitesse
-;                jmp fin_asserv
-;modifier_vitesse:
-;                jc augmente
-;                ; ici, A est positif
-;                jnb ACC.1, fin_asserv    ; seuil
-;                dec VITESSE                    ; la vitesse est trop grande, il faut la diminuer
-;                dec VITESSE
-;                dec VITESSE
-;                setb DIODE
-;                jmp fin_asserv
-;augmente:
-;                ; ici, A est négatif
-;;                jb ACC.1, fin_asserv    ; seuil
-;                inc VITESSE                    ; la vitesse est trop basse, il faut l'augmenter
-;                inc VITESSE
-;                inc VITESSE
-;                clr DIODE
-;fin_asserv:
-;                mov ATTENTE_ASSERV, #50    ; on relance une nouvelle attente
+      mov VITESSE, VITESSE_MIN
 pasEncore:
                
 ; ----------------------
 ; fin gestion du PWM
                                             ; attente du reste des 5ms (?tape 2 et 4)
-attente_fin_pwm:
-            jnb TF0, attente_fin_pwm
-                 mov A, TL0
-                 rrc A
- ;Le probl?me vient du fait qu'on recharge TL0 sans prendre en compte la valeur qu'il avait d?j?.
- ;Or, celle-ci peut varier de 1 car "jnb" dure deux cycles. On red?cale donc afin de ne plus avoir ce probl?me.
- ;Ce probl?me ne se pose qu'ici car, en d?but du programme, les embranchements conditionnels ne modifient pas la parit? de PC.
-                 jc pasNop
-                 nop                                    ; COUCOU MARC !!!
-pasNop:
-            clr TF0
-            clr TR0                       ; on arrete le timer 0
+            inc PCON
+               ; DODO
             cpl RS0                           ; toggle de banque
-            jmp demiBouclePWM                 ;? pr?sent, on refait l'autre moiti? de la boucle
+            jmp demiBouclePWM
 
             end    
