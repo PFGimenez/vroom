@@ -30,7 +30,7 @@
             NOIR_DROIT		bit 	00h
             TOGGLE_CAPT             bit     01h
             PANIQUE		bit 02h
-
+	
             VITESSE            equ    01b
             DIRECTION            equ    10b
                 VITESSE_MIN                equ     R2	;peut-être les remplacer par des R...
@@ -67,10 +67,10 @@ init:
             mov DIRECTION, #125d     ; roues droites
             mov VITESSE_MIN, #165                ; vitesse sans boost, modifiable par les boutons poussoirs
             mov VITESSE, VITESSE_MIN
-            mov ATTENTE_ASSERV, #24     ;2.5 * 24 = 60ms entre deux changements de puissance d?livr?e au moteur, soit trois cycles PWM
+            mov ATTENTE_ASSERV, #8     ;2.5 * 8 = 20ms entre deux changements de puissance d?livr?e au moteur, soit un cycle PWM
 		      mov HUIT_FOIS, #8
             mov 08h, #01h	; 08h: R0 de la banque 1
-            mov 09h, #40h	; 09h: R1 de la banque 1
+            mov 09h, #60h	; 09h: R1 de la banque 1
            
             ; TIMER
             setb EA
@@ -179,31 +179,30 @@ fin_bp:
 ; asservissement vitesse et adoucissement rotation
 
       djnz ATTENTE_ASSERV, pasEncore
-      mov ATTENTE_ASSERV, #24
+      mov ATTENTE_ASSERV, #8
 
       ; adoucissement rotation      
       mov A, @R1
       jnb ACC.0, pas_diminuer_compteur	; ACC.0 est le bit qui va disparaître
       dec COMPTEUR
+
 pas_diminuer_compteur:
       mov C, TOGGLE_CAPT
       clr TOGGLE_CAPT
       jnc pas_augmenter_compteur
       inc COMPTEUR
+
 pas_augmenter_compteur:
-      mov ACC.0, C
+      mov ACC.0, C     			; une valeur est conservée 2560ms
       rlc A
       mov ACC.0, C
-      djnz HUIT_FOIS, touche_plus_R1
+      djnz HUIT_FOIS, touche_pas_R1
       mov HUIT_FOIS, #8
       inc R1
-      mov A, R1
-      anl A, #01111111b	; on supprime le dernier bit, car on veut s'arrêter à 7F
-      jnz touche_plus_R1
-      ; R1 a overflow
-      mov R1, #40h
-touche_plus_R1:
-		jb PANIQUE, fin_consigne	;si on panique, pas besoin de calculer la droititude car on ne l'utilise pas
+      anl 09h, #11101111b	; au 6F on revient à 60
+touche_pas_R1:
+
+		jb PANIQUE, fin_consigne	;si on panique, la droititude reste à 0
 		mov A, COMPTEUR
 		clr C
 		subb A, #3d
@@ -224,9 +223,9 @@ fin_consigne:
       mov A, TL1
       mov TL1, #0            ; on n'?teint pas le timer1 seulement pour ?a, WOLOLO
       clr C
-      subb A, #10d
+      subb A, #3d
       jnb ACC.7, pas_bloque
-      ; A est négatif
+      ; TL1 < 3
       mov VITESSE, #180d		; BOOST!
       jmp pasEncore
 pas_bloque:
