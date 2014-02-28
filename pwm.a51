@@ -11,7 +11,7 @@
 
 ; Utilisations des registres:
 ; R0: pointe vers un registe contenant (temps d'?tat haut en microsecondes - 1000) / 4
-; R1: pointe vers un octet entre 30h et 7Fh
+; R1: pointe vers un octet entre 60h et 6Fh
 
 ; Valeurs:
 ; Direction: entre 28 (droite) et 222 (gauche). Tout droit: 125
@@ -20,136 +20,173 @@
 ; Un asservissement en vitesse est effectu?. Pour cela, le timer 1 compte sur P3.5, qui est reli? ? la diode.
 ; R?guli?rement, la valeur de ce timer est v?rifi?e. La d?cision d'augmenter la vitesse ou de la diminuer est alors prise selon cette valeur. Enfin, le timer est remis ? zero.
 
-            PIN_DIR               bit    P1.4
-            PIN_MOTEUR            bit    P1.5
-            CAPT_D                bit    P1.6
-            CAPT_G                bit    P1.7
-            DIODE               bit       P1.0
-            LASER_ACTIVE  bit P3.0	; modifié par la carte esclave
+            PIN_DIR           bit    P1.4
+            PIN_MOTEUR        bit    P1.5
+            CAPT_D            bit    P1.6
+            CAPT_G            bit    P1.7
+            DIODE             bit    P1.0
+            LASER_ACTIVE      bit 	 P3.0    ; modifié par la carte esclave
 
-            NOIR_DROIT		bit 	00h
-            TOGGLE_CAPT             bit     01h
-            PANIQUE		bit 02h
-	
-            VITESSE            equ    01b
-            DIRECTION            equ    10b
-                VITESSE_MIN                equ     R2	;peut-être les remplacer par des R...
-;                VITESSE_MIN_ADDR				equ 12h
-                ATTENTE_ASSERV        equ     R3
-;                ATTENTE_ASSERV_ADDR equ 13h
-                BP_MEM                equ     R4
-;                BP_MEM_ADDR	equ 14h
-                DROITITUDE					equ 	R5
-;                DROITITUDE_ADDR equ 15h
-                HUIT_FOIS	equ R6
-;                HUIT_FOIS_ADDR equ 16h
-                COMPTEUR	equ R6
-;                COMPTEUR_ADDR equ 17h
-            
-                                                   
+            NOIR_DROIT        bit    00h
+            TOGGLE_CAPT       bit    01h
+            PANIQUE        	bit    02h
+   
+            VITESSE           equ    01b
+            DIRECTION         equ    10b
+            VITESSE_MIN       equ    R2
+;            ATTENTE_ASSERV    equ    R3
+            ATTENTE_BLINK 		equ    R3
+            BP_MEM            equ    R4
+            DROITITUDE        equ    R5
+            HUIT_FOIS         equ 	 R6
+            COMPTEUR          equ    R7
+           
+                                                  
             org 0000h
             jmp init
-            
+           
             ; Réveil par cette interruption (mode idle)
             org 000Bh
-				clr TF0
+                clr TF0
             reti
-                       
+                      
             org 0030h
 ;---------------------------
 ; Initialisation
 init:
+                clr PIN_DIR
+                clr PIN_MOTEUR
+                clr LASER_ACTIVE
+                
+                ; normalement pas nécessaire
+                clr NOIR_DROIT
+                clr TOGGLE_CAPT
+                clr PANIQUE
+                
             mov SP, #0Fh             ; afin de ne pas ?craser la banque 1
             clr DIODE                     ; on allume la diode de la carte
-				setb RS0	; utilisation de la banque 1
-           
+                setb RS0    ; utilisation de la banque 1
+          
             ; ASSERV
             mov DIRECTION, #125d     ; roues droites
-            mov VITESSE_MIN, #165                ; vitesse sans boost, modifiable par les boutons poussoirs
+            mov VITESSE_MIN, #160                ; vitesse sans boost, modifiable par les boutons poussoirs
             mov VITESSE, VITESSE_MIN
-            mov ATTENTE_ASSERV, #8     ;2.5 * 8 = 20ms entre deux changements de puissance d?livr?e au moteur, soit un cycle PWM
-		      mov HUIT_FOIS, #8
-            mov 08h, #01h	; 08h: R0 de la banque 1
-            mov 09h, #60h	; 09h: R1 de la banque 1
-           
+;            mov ATTENTE_ASSERV, #8     ;2.5 * 8 = 20ms entre deux changements de puissance d?livr?e au moteur, soit un cycle PWM
+              mov HUIT_FOIS, #8
+            mov 09h, #60h    ; 09h: R1 de la banque 1
+          
+; mov VITESSE, #250       
+;mov DIRECTION, #35    ; pour test
+          
             ; TIMER
             setb EA
-            setb ET0				; activation de l'interruption de timer0
+            setb ET0                ; activation de l'interruption de timer0
             mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe) et démarrage
             setb TR0
             setb TR1
-            db 0,0,0,0,0,0	; équilibrage de timer 0 (OPEN NOP PARTY)
-
+            db 0,0,0,0,0,0    ; équilibrage de timer 0 (OPEN NOP PARTY)
 ; ne rien écrire ici
-
+setb DIODE
 demiBouclePWM:
 ; --------------------------
-; PWM         
-            ; on s'occupe du moteur si R0 vaut 01b, de la direction si R0 vaut 10b
-            ; il ne faut pas faire d'embranchement sinon timer 0 n'aura pas toujours la même valeur
-            mov A, R0
-				mov C, ACC.2
-				orl C, ACC.3
+; PWM    
+				mov C, PANIQUE
 				cpl C
-				mov ACC.7, C	; pourquoi ACC.7 particulièrement? Sans raison, c'est juste un bit disponible pour retenir C
-				anl C, ACC.0
-            mov PIN_MOTEUR, C
-				mov C, ACC.1
-				anl C, ACC.7
-            mov PIN_DIR, C
+				mov DIODE, C
+            ; on s'occupe du moteur si R0 vaut 01b, de la direction si R0 vaut 10b
+            ; il ne faut pas faire d'embranchement sinon timer 0 n'aura pas toujours la me;me valeur
+;            mov A, R0
+;            mov C, ACC.0            ; on allume le moteur si R0 vaut 001b
+;            anl C, /ACC.1
+;                anl C, /ACC.2
+;            mov PIN_MOTEUR, C
+;            mov C, ACC.1         ; on change de direction si R0 vaut 010b
+;            anl C, /ACC.0
+;                anl C, /ACC.2
+;            mov PIN_DIR, C
 
             ; attente de 1ms. Pendant ce temps, on fait le reste.
-            mov TL0, #2Ch
+            mov TL0, #2Eh
             mov TH0, #0FCh
+
+            inc PCON            ; DODO            
+
+              ; attente de 1ms encore
+            mov TL0, #00Bh
+            mov TH0, #0FCh
+          
+            ; R0 pointe soit vers vitesse, soit vers direction, soit vers 0
+;            mov A, @R0
+;            jz etat_bas
+ jmp etat_bas
+; ne rien ?crire ici, sinon le cas o? @R0=0 serait d?cal? de quelques microsecondes, ce qui pourrait faire exploser le v?hicule.
+
+boucleElementaire:    ; dur?e d'une boucle ?l?mentaire: 4microsecondes
+            nop
+            nop
+            djnz ACC, boucleElementaire
+etat_bas:
+;            clr PIN_MOTEUR
+            nop                                ; afin que l'écart temporel entre les deux clr soit le me;me qu'en les deux mov
+            nop
+            nop
+            nop
+            nop
+            nop
+;            clr PIN_DIR
+            inc PCON    ; DODO        (si R3 vaut 250, alors que PC est sur cette ligne, timer0 vaut FFFF)
+          
+             ; on lance le timer pour 0.5ms
+            mov TL0, #026h
+            mov TH0, #0FEh
 
 ; ----------------------
 ; gestion des capteurs et de la direction
 
-					; cas particulier: si les deux détectent en même temps, on va tout droit
-					jnb CAPT_G, pasLesDeux
-					jnb CAPT_D, pasLesDeux
-					jmp tout_droit
+                    ; cas particulier: si les deux détectent en me;me temps, on va tout droit
+                jnb CAPT_G, pasLesDeux
+                jnb CAPT_D, pasLesDeux
+                jmp tout_droit
 pasLesDeux:
-					
-                mov C, NOIR_DROIT
-                anl C, /CAPT_G                    ;si on capte ? gauche, on met NOIR_DROIT ? 0. Sinon, on ne change rien.
-                orl C, CAPT_D                    ;si on capte ? droite, on met NOIR_DROIT ? 1. Sinon, on ne change rien.
-                ; ensuite, on effectue l'op?ration "XRL C, NOIR_DROIT" qui n'est pas dans le jeu d'instructions
-                jnb NOIR_DROIT, est_nul
-                mov NOIR_DROIT, C
-                cpl C
-                jmp fin_xor
+                   
+            mov C, NOIR_DROIT
+            anl C, /CAPT_G                    ;si on capte ? gauche, on met NOIR_DROIT ? 0. Sinon, on ne change rien.
+            orl C, CAPT_D                    ;si on capte ? droite, on met NOIR_DROIT ? 1. Sinon, on ne change rien.
+            ; ensuite, on effectue l'op?ration "XRL C, NOIR_DROIT" qui n'est pas dans le jeu d'instructions
+            jnb NOIR_DROIT, est_nul
+            mov NOIR_DROIT, C
+            cpl C
+            jmp fin_xor
 est_nul:
-                mov NOIR_DROIT, C
+            mov NOIR_DROIT, C
 fin_xor:
-                jnc pasChange
-                clr PANIQUE 	; ouf, on a retrouvé la ligne
- 				 	 setb TOGGLE_CAPT
+            jnc pasChange
+            clr PANIQUE     ; ouf, on a retrouvé la ligne
+                 setb TOGGLE_CAPT
 pasChange:
-                jnb LASER_ACTIVE, tourne
+            jnb LASER_ACTIVE, tourne
 tout_droit:
-                ; si on arrive ici, c'est que NOIR_DROIT a chang?
-                ; dans ce cas, on remet les roues droites et on reprend la vitesse initiale
-                mov DIRECTION, #125
-                jmp fin_direction
-               
+            ; si on arrive ici, c'est que NOIR_DROIT a chang?
+            ; dans ce cas, on remet les roues droites et on reprend la vitesse initiale
+            mov DIRECTION, #125
+            jmp fin_direction
+              
 tourne:
-                jb NOIR_DROIT, tourne_droite
-                mov A, #177
-                jnb PANIQUE, pas_braque_gauche
-					 add A, #50		; la somme doit faire 222
+            jb NOIR_DROIT, tourne_droite
+            mov A, #177
+            jnb PANIQUE, pas_braque_gauche
+                add A, #50        ; la somme doit faire 222
 pas_braque_gauche:
-					 clr C
+                    clr C
                 subb A, DROITITUDE
                 mov DIRECTION, A
-                mov A, DIRECTION
                 jmp fin_direction
 tourne_droite:
                 mov A, #78
                 jnb PANIQUE, pas_braque_droite
                 clr C
- 					 subb A, #50	; la différence doit faire 28
-pas_braque_droite:                
+                      subb A, #50    ; la différence doit faire 28
+pas_braque_droite:               
                 add A, DROITITUDE
                 mov DIRECTION, A
 fin_direction:
@@ -157,6 +194,7 @@ fin_direction:
 ; ----------------------
 ; gestion des boutons poussoirs
 
+jmp fin_bp
                 mov A, P1
                 xrl A, BP_MEM    ; on v?rifie que l'?tat a chang? (qu'on soit sur un front)
                 anl A, BP_MEM  ; on v?rifie que la pr?c?dente valeur est 1. Ces deux lignes d?tectent donc un front descendant.
@@ -176,14 +214,24 @@ pas_bp1:
 fin_bp:
 
 ; --------------------------
+; clignotage de la led en cas de panique
+        jnb PANIQUE, fin_blink
+      djnz ATTENTE_BLINK, fin_blink
+      mov ATTENTE_BLINK, #200 ; 200 * 2.5 = 500 ms
+;      cpl DIODE
+fin_blink:
+
+; --------------------------
 ; asservissement vitesse et adoucissement rotation
+jmp pasEncore
+		mov A, HUIT_FOIS
+		jnz pasEncore
+;      djnz ATTENTE_ASSERV, pasEncore
+;      mov ATTENTE_ASSERV, #8
 
-      djnz ATTENTE_ASSERV, pasEncore
-      mov ATTENTE_ASSERV, #8
-
-      ; adoucissement rotation      
+      ; adoucissement rotation     
       mov A, @R1
-      jnb ACC.0, pas_diminuer_compteur	; ACC.0 est le bit qui va disparaître
+      jnb ACC.0, pas_diminuer_compteur    ; ACC.0 est le bit qui va disparaître
       dec COMPTEUR
 
 pas_diminuer_compteur:
@@ -193,30 +241,31 @@ pas_diminuer_compteur:
       inc COMPTEUR
 
 pas_augmenter_compteur:
-      mov ACC.0, C     			; une valeur est conservée 2560ms
+      mov ACC.0, C                 ; une valeur est conservée 2560ms
       rlc A
       mov ACC.0, C
       djnz HUIT_FOIS, touche_pas_R1
       mov HUIT_FOIS, #8
       inc R1
-      anl 09h, #11101111b	; au 6F on revient à 60
+      anl 09h, #11101111b    ; au 6F on revient r' 60
 touche_pas_R1:
 
-		jb PANIQUE, fin_consigne	;si on panique, la droititude reste à 0
-		mov A, COMPTEUR
-		clr C
-		subb A, #3d
-		jnb ACC.7, pasTropPetit
+        jb PANIQUE, fin_consigne    ;si on panique, la droititude reste r' 0
+        mov A, COMPTEUR
+        clr C
+        subb A, #3d
+        jnb ACC.7, pasTropPetit
       ; compteur < 3
-      setb PANIQUE	; on a perdu la ligne! Panique à bord!
+      setb PANIQUE    ; on a perdu la ligne! Panique r' bord!
+;      clr DIODE        ; on rallume la diode
       mov DROITITUDE, #0
-		jmp fin_consigne
+        jmp fin_consigne
 pasTropPetit:
-		mov A, DROITITUDE
-		clr C
-		subb A, #40d	; On ne retourne pas complètement à des roues droites
-		jz fin_consigne
-		inc DROITITUDE
+        mov A, DROITITUDE
+        clr C
+        subb A, #40d    ; On ne retourne pas complc(tement r' des roues droites
+        jz fin_consigne
+        inc DROITITUDE
 fin_consigne:
 
       ; asservissement vitesse
@@ -226,50 +275,21 @@ fin_consigne:
       subb A, #3d
       jnb ACC.7, pas_bloque
       ; TL1 < 3
-      mov VITESSE, #180d		; BOOST!
+      mov VITESSE, #180d        ; BOOST!
       jmp pasEncore
 pas_bloque:
       mov VITESSE, VITESSE_MIN
 pasEncore:
 
-
-            inc PCON			; DODO             
-
 ; ----------------------
 ; fin gestion du PWM
 
-              ; attente de 1ms encore
-            mov TL0, #00Bh
-            mov TH0, #0FCh
-           
-                ; R0 pointe soit vers vitesse, soit vers direction, soit vers 0
-                mov A, @R0
-                jz etat_bas
-
-; ne rien ?crire ici, sinon le cas o? @R0=0 serait d?cal? de quelques microsecondes, ce qui pourrait faire exploser le v?hicule.
-
-boucleElementaire:    ; dur?e d'une boucle ?l?mentaire: 4microsecondes
-                nop
-                nop
-            djnz ACC, boucleElementaire
-etat_bas:
-            clr PIN_MOTEUR
-            nop								; afin que l'écart temporel entre les deux clr soit le même qu'en les deux mov
-            nop
-            nop
-            nop
-            clr PIN_DIR
-            inc PCON	; DODO		(si R3 vaut 250, alors que PC est sur cette ligne, timer0 vaut FFFF)
-           
-             ; on lance le timer pour 0.5ms
-            mov TL0, #029h
-            mov TH0, #0FEh
-            
-				inc R0
-				anl 08h, #111b	; on tourne sur 8 registres
+                inc R0
+                anl 08h, #111b    ; on tourne sur 8 registres
 pasToggle:
             inc PCON
                ; DODO
             jmp demiBouclePWM
 
-            end    
+            end   
+            
