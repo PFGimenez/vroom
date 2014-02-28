@@ -29,6 +29,7 @@
 
             NOIR_DROIT		bit 	00h
             TOGGLE_CAPT             bit     01h
+            PANIQUE		bit 02h
 
             VITESSE            equ    01b
             DIRECTION            equ    10b
@@ -122,6 +123,7 @@ est_nul:
                 mov NOIR_DROIT, C
 fin_xor:
                 jnc pasChange
+                clr PANIQUE 	; ouf, on a retrouvé la ligne
  				 	 setb TOGGLE_CAPT
 pasChange:
                 jnb LASER_ACTIVE, tourne
@@ -133,27 +135,23 @@ tout_droit:
                
 tourne:
                 jb NOIR_DROIT, tourne_droite
-                mov A, #222
-                clr C
+                mov A, #177
+                jnb PANIQUE, pas_braque_gauche
+					 add A, #50		; la somme doit faire 222
+pas_braque_gauche:
+					 clr C
                 subb A, DROITITUDE
                 mov DIRECTION, A
-;                mov A, DIRECTION
-;                clr C        ; pour ne pas fausser les subb
-;                subb A, #222
-;                jz fin_direction
-;                ; on tourne progressivement et on abaisse la vitesse
-;                inc DIRECTION
+                mov A, DIRECTION
                 jmp fin_direction
 tourne_droite:
-                mov A, #28
+                mov A, #78
+                jnb PANIQUE, pas_braque_droite
+                clr C
+ 					 subb A, #50	; la différence doit faire 28
+pas_braque_droite:                
                 add A, DROITITUDE
                 mov DIRECTION, A
-
-;                mov A, DIRECTION            ;pas de commentaires ici. ?a vous apprendra.
-;                clr C
-;                subb A, #28
-;                jz fin_direction
-;                dec DIRECTION
 fin_direction:
 
 ; ----------------------
@@ -189,6 +187,7 @@ fin_bp:
       dec COMPTEUR
 pas_diminuer_compteur:
       mov C, TOGGLE_CAPT
+      clr TOGGLE_CAPT
       jnc pas_augmenter_compteur
       inc COMPTEUR
 pas_augmenter_compteur:
@@ -204,17 +203,19 @@ pas_augmenter_compteur:
       ; R1 a overflow
       mov R1, #40h
 touche_plus_R1:
+		jb PANIQUE, fin_consigne	;si on panique, pas besoin de calculer la droititude car on ne l'utilise pas
 		mov A, COMPTEUR
 		clr C
 		subb A, #3d
 		jnb ACC.7, pasTropPetit
       ; compteur < 3
+      setb PANIQUE	; on a perdu la ligne! Panique à bord!
       mov DROITITUDE, #0
 		jmp fin_consigne
 pasTropPetit:
 		mov A, DROITITUDE
 		clr C
-		subb A, #90d	; butée. On ne retourne pas complètement à des roues droites
+		subb A, #40d	; On ne retourne pas complètement à des roues droites
 		jz fin_consigne
 		inc DROITITUDE
 fin_consigne:
