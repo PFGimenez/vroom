@@ -10,10 +10,11 @@
 ; La gestion des capteurs est effectu?e durant ces deux quarts de cycle PWM d'attente.
 
 ; Utilisations des registres:
-; R3: (temps d'?tat haut en microsecondes - 1000) / 4
+; R0: pointe vers un registe contenant (temps d'?tat haut en microsecondes - 1000) / 4
+; R1: pointe vers un octet entre 30h et 7Fh
 
 ; Valeurs:
-; Direction: entre 25 (droite) et 225 (gauche). Tout droit: 125
+; Direction: entre 28 (droite) et 222 (gauche). Tout droit: 125
 
 ; Asservissement:
 ; Un asservissement en vitesse est effectu?. Pour cela, le timer 1 compte sur P3.5, qui est reli? ? la diode.
@@ -24,19 +25,31 @@
             CAPT_D                bit    P1.6
             CAPT_G                bit    P1.7
             DIODE               bit       P1.0
-            NOIR_DROIT             bit     00h
-            LASER_ACTIVE  bit 01h
-            ENCORE bit 02h
+            LASER_ACTIVE  bit P3.0	; modifié par la carte esclave
+
+            NOIR_DROIT		bit 	00h
+            TOGGLE_CAPT             bit     01h
+
             VITESSE            equ    01b
             DIRECTION            equ    10b
-                VITESSE_MIN                equ     30h
-                ATTENTE_ASSERV        equ     32h
-                BP_MEM                equ     33h
+                VITESSE_MIN                equ     R2	;peut-être les remplacer par des R...
+;                VITESSE_MIN_ADDR				equ 12h
+                ATTENTE_ASSERV        equ     R3
+;                ATTENTE_ASSERV_ADDR equ 13h
+                BP_MEM                equ     R4
+;                BP_MEM_ADDR	equ 14h
+                DROITITUDE					equ 	R5
+;                DROITITUDE_ADDR equ 15h
+                HUIT_FOIS	equ R6
+;                HUIT_FOIS_ADDR equ 16h
+                COMPTEUR	equ R6
+;                COMPTEUR_ADDR equ 17h
+            
                                                    
             org 0000h
             jmp init
             
-            ; Réveil par cette interruption  (mode idle)
+            ; Réveil par cette interruption (mode idle)
             org 000Bh
 				clr TF0
             reti
@@ -45,24 +58,26 @@
 ;---------------------------
 ; Initialisation
 init:
-            mov SP, #6Fh             ; afin de ne pas ?craser la banque 1
+            mov SP, #0Fh             ; afin de ne pas ?craser la banque 1
             clr DIODE                     ; on allume la diode de la carte
+				setb RS0	; utilisation de la banque 1
            
             ; ASSERV
             mov DIRECTION, #125d     ; roues droites
             mov VITESSE_MIN, #165                ; vitesse sans boost, modifiable par les boutons poussoirs
             mov VITESSE, VITESSE_MIN
-            mov ATTENTE_ASSERV, #50     ; 500ms entre deux changements de puissance d?livr?e au moteur
-				setb RS0
+            mov ATTENTE_ASSERV, #24     ;2.5 * 24 = 60ms entre deux changements de puissance d?livr?e au moteur, soit trois cycles PWM
+		      mov HUIT_FOIS, #8
             mov 08h, #01h	; 08h: R0 de la banque 1
+            mov 09h, #40h	; 09h: R1 de la banque 1
            
             ; TIMER
             setb EA
             setb ET0				; activation de l'interruption de timer0
-            mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe)
+            mov TMOD, #01010001b     ; initialisation du timer 0 (mode 16bits) et du timer 1 (mode 16bits, avec horloge externe) et démarrage
             setb TR0
-            setb TR1                         ; on lance directement le timer 1
-            db 0,0,0,0,0,0	; équilibrage de timer 0
+            setb TR1
+            db 0,0,0,0,0,0	; équilibrage de timer 0 (OPEN NOP PARTY)
 
 ; ne rien écrire ici
 
@@ -92,7 +107,7 @@ demiBouclePWM:
 					; cas particulier: si les deux détectent en même temps, on va tout droit
 					jnb CAPT_G, pasLesDeux
 					jnb CAPT_D, pasLesDeux
-					jmp TOUT_DROIT
+					jmp tout_droit
 pasLesDeux:
 					
                 mov C, NOIR_DROIT
@@ -106,29 +121,39 @@ pasLesDeux:
 est_nul:
                 mov NOIR_DROIT, C
 fin_xor:
-                jb LASER_ACTIVE, tout_droit
-                jnc tourne_normalement
+                jnc pasChange
+ 				 	 setb TOGGLE_CAPT
+pasChange:
+                jnb LASER_ACTIVE, tourne
 tout_droit:
                 ; si on arrive ici, c'est que NOIR_DROIT a chang?
                 ; dans ce cas, on remet les roues droites et on reprend la vitesse initiale
                 mov DIRECTION, #125
                 jmp fin_direction
                
-tourne_normalement:
+tourne:
                 jb NOIR_DROIT, tourne_droite
-                mov A, DIRECTION
-                clr C        ; pour ne pas fausser les subb
-                subb A, #221
-                jz fin_direction
-                ; on tourne progressivement et on abaisse la vitesse
-                inc DIRECTION
+                mov A, #222
+                clr C
+                subb A, DROITITUDE
+                mov DIRECTION, A
+;                mov A, DIRECTION
+;                clr C        ; pour ne pas fausser les subb
+;                subb A, #222
+;                jz fin_direction
+;                ; on tourne progressivement et on abaisse la vitesse
+;                inc DIRECTION
                 jmp fin_direction
 tourne_droite:
-                mov A, DIRECTION            ;pas de commentaires ici. ?a vous apprendra.
-                clr C
-                subb A, #29
-                jz fin_direction
-                dec DIRECTION
+                mov A, #28
+                add A, DROITITUDE
+                mov DIRECTION, A
+
+;                mov A, DIRECTION            ;pas de commentaires ici. ?a vous apprendra.
+;                clr C
+;                subb A, #28
+;                jz fin_direction
+;                dec DIRECTION
 fin_direction:
 
 ; ----------------------
@@ -153,13 +178,54 @@ pas_bp1:
 fin_bp:
 
 ; --------------------------
-; asservissement
+; asservissement vitesse et adoucissement rotation
 
       djnz ATTENTE_ASSERV, pasEncore
-      mov ATTENTE_ASSERV, #50
+      mov ATTENTE_ASSERV, #24
+
+      ; adoucissement rotation      
+      mov A, @R1
+      jnb ACC.0, pas_diminuer_compteur	; ACC.0 est le bit qui va disparaître
+      dec COMPTEUR
+pas_diminuer_compteur:
+      mov C, TOGGLE_CAPT
+      jnc pas_augmenter_compteur
+      inc COMPTEUR
+pas_augmenter_compteur:
+      mov ACC.0, C
+      rlc A
+      mov ACC.0, C
+      djnz HUIT_FOIS, touche_plus_R1
+      mov HUIT_FOIS, #8
+      inc R1
+      mov A, R1
+      anl A, #01111111b	; on supprime le dernier bit, car on veut s'arrêter à 7F
+      jnz touche_plus_R1
+      ; R1 a overflow
+      mov R1, #40h
+touche_plus_R1:
+		mov A, COMPTEUR
+		clr C
+		subb A, #3d
+		jnb ACC.7, pasTropPetit
+      ; compteur < 3
+      mov DROITITUDE, #0
+		jmp fin_consigne
+pasTropPetit:
+		mov A, DROITITUDE
+		clr C
+		subb A, #90d	; butée. On ne retourne pas complètement à des roues droites
+		jz fin_consigne
+		inc DROITITUDE
+fin_consigne:
+
+      ; asservissement vitesse
       mov A, TL1
       mov TL1, #0            ; on n'?teint pas le timer1 seulement pour ?a, WOLOLO
-      jnz pas_bloque
+      clr C
+      subb A, #10d
+      jnb ACC.7, pas_bloque
+      ; A est négatif
       mov VITESSE, #180d		; BOOST!
       jmp pasEncore
 pas_bloque:
@@ -180,7 +246,7 @@ pasEncore:
                 mov A, @R0
                 jz etat_bas
 
-; ne rien ?crire ici, sinon le cas o? R3=0 serait d?cal? de quelques microsecondes, ce qui pourrait faire exploser le v?hicule.
+; ne rien ?crire ici, sinon le cas o? @R0=0 serait d?cal? de quelques microsecondes, ce qui pourrait faire exploser le v?hicule.
 
 boucleElementaire:    ; dur?e d'une boucle ?l?mentaire: 4microsecondes
                 nop
