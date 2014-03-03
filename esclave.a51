@@ -1,113 +1,94 @@
-
 ; ESCLAVE / PF
-; Deux proto-threads sont utilisÈs sur cette carte.
-; Le passage de l'un ‡ l'autre se fait de la maniËre suivant.
-; A chaque fois que le timer0 (sur 13bits) overflow, son interruption dÈroute le programme et modifie la banque.
-; Chaque thread a ‡ sa disposition une pile de 5 octets qu'il ne doit pas dÈpasser
+; Deux proto-threads sont utilis√©s sur cette carte.
+; Le passage de l'un ≈ï l'autre se fait de la maniƒçre suivant.
+; A chaque fois que le timer0 (sur 13bits) overflow, son interruption d√©route le programme, push le contexte, modifie SP et pop le contexte.
+; Un m√©canisme de mutex est mis en place pour la donn√©e partag√©e entre les deux threads
 
-	SORTIE_LASER equ	30h
-	MUTEX_A		 bit	00h	; 0 si A occupÈ, 1 si A disponible
+	MUTEX		 bit	00h	; 0 si A occup√©, 1 si A disponible
+    NB_THREAD    bit    01h
+    AUTRE_SP     equ    30h
+	 QUI			  bit 	02h 
  
 	org 0000h
 	jmp init
-
-	org 0023h
-   clr RI
-   push SBUF
-   mov A, SBUF
-   clr ACC.7		; on supprime le bit de paritÈ
-	push ACC
-	push 7Fh	;vaut 0
-	; TODO
-	ret	
-
-	retour:
-	reti
 
 ; ----------------------
 ; GESTION DU TIMER 0
 	org 000Bh
 	jmp gestion_threads
    
-   org 34h
-   inc R1
-   org 43h
-   inc R1
-   org 44h
-   inc R1
-   org 47h
-   ; passage au maÓtre
-   jmp retour
-   
-	org 0050h
+	org 0030h
 init:
 ; --------------------
 ; INITIALISATION
-	; Modification de SP
-	mov SP, #10h
-	; Adresse du thread 1
-	mov 18h, #1Ah
-	mov 19h, #00h       ; octet de poids faible
-	mov 1Ah, #02h       ; octet de poids fort
-	setb MUTEX_A
-
-	; Lancement du timer 0
+	; Adresse du thread 1, valeur de sa pile
+	mov 19h, #02h       ; octet de poids fort
+   mov 1Ah, #10h ; PSW, banque 2
+   mov AUTRE_SP, #1Bh
+   ; Mutex
+	setb MUTEX
+	; Lancement du timer 0 (mode 0, 13 bits)
+   mov TMOD, #0
 	setb EA
 	setb ET0
 	setb TR0
-	jmp thread1
-			
+    
+	jmp thread0
+
 ; ----------------------
 ; THREAD 0, banque 0
 	; TODO
-thread1:
-;recommence:
-	call lock
-	mov A, #1
-	call unlock
-	db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-	jmp thread1
+thread0:
+	jmp thread0
 	
 ; ----------------------
-; THREAD 1, banque 1
+; THREAD 1, banque 2
 	org 0200h
 	; TODO
-thread2:
-	call lock
-	mov A, #2	
-	call unlock
-	db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-	jmp thread2
+thread1:
+	jmp thread1
 
 ; ----------------------
 ; Gestion des threads
 
 gestion_threads:
-	setb RS1
-	mov R0, SP
-   cpl RS0 			; toggle de banque
-   mov SP, R0
-   clr RS1
-   reti
+    push PSW
+    push ACC
+    mov A, SP
+    xch A, AUTRE_SP    
+    mov SP, A
+    cpl NB_THREAD
+    pop ACC
+    pop PSW     ; le changement de banque se fait au chargement de PSW
+    reti
 
 ; ----------------------
-; ProcÈdure lock A
+; Proc√©dure lock
 
 lock:
-	jbc MUTEX_A, fin_lock
-	clr TR0	; on arrÍte le timer 0
+	jbc MUTEX, fin_lock ; le choix de cette instruction n'est pas innocent. C'est une des rares instructions √† fournir √† la fois un test et une affectation. De ce fait, ces deux √©tapes d'acquisition du mutex sont atomiques et ne peuvent √™tre interrompues par un changement de thread qui pourrait tout ruiner.
+	; si on est ici, c'est que la variable n'est pas disponible
+	mov C, QUI
+	jb NB_THREAD, pasComplement
+	cpl C
+pasComplement:	
+	jc fin_lock	; dans ce cas, c'est que c'est ce mÍme thread qui utilise dÈj‡ la ressource
+	clr TR0	; on arrƒôte le timer 0
 	mov TL0, #0FFh
-	mov TH0, #0FFh	; on le met tout ‡ la fin
-	setb TR0	; on relance le timer 0, ce qui prÈcipite le changement de thread
+	mov TH0, #0FFh	; on le met tout ≈ï la fin
+	setb TR0	; on relance le timer 0, ce qui pr√©cipite le changement de thread
+    ; ou alors, juste "inc PCON" pour dormir le reste du temps
 	jmp lock
 fin_lock:
+	mov C, NB_THREAD
+	mov QUI, C
 	ret
 
 ; ----------------------
-; ProcÈdure unlock A
+; Proc√©dure unlock
 
 unlock:
-	setb MUTEX_A
+	setb MUTEX
 	ret
-	
+
 	end
