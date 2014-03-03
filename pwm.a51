@@ -29,7 +29,8 @@
 
             NOIR_DROIT        bit    00h
             TOGGLE_CAPT       bit    01h
-            PANIQUE            bit    10h
+            PANIQUE           bit    10h
+				PASLESDEUX			bit	 11h
  
             VITESSE           equ    01b
             DIRECTION         equ    10b
@@ -49,7 +50,7 @@
          
             ; Réveil par cette interruption (mode idle)
             org 000Bh
-                clr TF0
+            clr TF0
             reti
                     
             org 0030h
@@ -147,6 +148,17 @@ etat_bas:
 
 ; ----------------------
 ; gestion des capteurs et de la direction
+                    ; cas particulier: si les deux détectent en me;me temps, on va tout droit
+                jnb CAPT_G, pasNouveauTour
+                jnb CAPT_D, pasNouveauTour
+				    jbc PASLESDEUX, passageLigneNoire
+				    jmp fin_direction	; on est encore sur la ligne noire
+passageLigneNoire:
+                djnz NB_TOURS, tout_droit   ; on compte le nombre de tours. Le début d'un tour est repéré par la bande noire.
+                ; POWER DOWN
+                orl PCON, #10b
+                jmp fin_direction		; le cas de la ligne noire est un peu complexe du fait que NOIR_DROIT est binaire et ne peut g�rer ce cas.
+pasNouveauTour:
 
             mov C, NOIR_DROIT
             anl C, /CAPT_G                    ;si on capte ? gauche, on met NOIR_DROIT ? 0. Sinon, on ne change rien.
@@ -162,13 +174,7 @@ fin_xor:
             jnc pasChange
             clr PANIQUE     ; ouf, on a retrouvé la ligne
             setb TOGGLE_CAPT    ; on compte
-                    ; cas particulier: si les deux détectent en me;me temps, on va tout droit
-                jnb CAPT_G, pasLesDeux
-                jnb CAPT_D, pasLesDeux
-                djnz NB_TOURS, tout_droit   ; on compte le nombre de tours. Le début d'un tour est repéré par la bande noire.
-                ; POWER DOWN
-                orl PCON, #10b
-pasLesDeux:
+            setb PASLESDEUX	; pour compter les tours
 pasChange:
             jnb LASER_ACTIVE, tourne
 tout_droit:
